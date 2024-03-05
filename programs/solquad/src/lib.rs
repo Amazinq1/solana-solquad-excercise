@@ -1,7 +1,3 @@
-use anchor_lang::prelude::*;
-
-declare_id!("5sFUqUTjAMJARrEafMX8f4J1LagdUQ9Y8TR8HwGNHkU8");
-
 #[program]
 pub mod solquad {
     use super::*;
@@ -41,6 +37,16 @@ pub mod solquad {
         let pool_account = &mut ctx.accounts.pool_account;
         let project_account = &ctx.accounts.project_account;
 
+        //check if the project is already in the pool
+        if project_account.is_in_pool {
+            return Err(ErrorCode::ProjectAlreadyInPool.into());
+        }
+
+        //check if the project is already associated with a pool
+        if pool_account.projects.iter().any(|&p |p == project_account.project_owner) {
+            return Err(ErrorCode::ProjectAlreadyExists.into());
+        }
+
         pool_account.projects.push(
             project_account.project_owner
         );
@@ -73,6 +79,9 @@ pub mod solquad {
         let escrow_account = &mut ctx.accounts.escrow_account;
         let pool_account = &mut ctx.accounts.pool_account;
         let project_account = &mut ctx.accounts.project_account;
+
+        // I included a total_distributable_amt to accumulate the distributable amounts for all projects.
+        let mut total_distributable_amt: u64 = 0;
   
         for i in 0..escrow_account.project_reciever_addresses.len() {
             let distributable_amt: u64;
@@ -85,13 +94,16 @@ pub mod solquad {
                 votes = 0;
             }
 
+            // it is always important to use checked arithmetic to handle potential overflows
             if votes != 0 {
-                distributable_amt = (votes / pool_account.total_votes) * escrow_account.creator_deposit_amount as u64;
-            } else {
-                distributable_amt = 0;
+                if let Some(votes_times_amount) = votes.checked_mul(escrow_account.creator_deposit_amount as u64) {
+                    let distributable_amt = votes_times_amount.checked_div(pool_account.total_votes).unwrap_or(0);
+                    total_distributable_amt = total_distributable_amt.checked_add(distributable_amt).unwrap_or(total_distributable_amt);
+                }
             }
 
-            project_account.distributed_amt = distributable_amt;
+            // Set the total distributable amount for the project
+            project_account.distributed_amt = total_distributable_amt;
         }
 
         Ok(())
@@ -202,6 +214,7 @@ pub struct Project {
     pub votes_count: u64,
     pub voter_amount: u64,
     pub distributed_amt: u64,
+    is_in_pool: bool,
 }
 
 // Voters voting for the project
@@ -210,4 +223,11 @@ pub struct Voter {
     pub voter: Pubkey,
     pub voted_for: Pubkey,
     pub token_amount: u64
+}
+
+// add error code that checks if the project is already in pool nad if it exits
+#[error_code]
+pub enum ErrorCode {
+    ProjectAlreadyInPool,
+    ProjectAlreadyExists,
 }
